@@ -15,11 +15,13 @@ import kotlinx.coroutines.experimental.delay
 import kotlinx.coroutines.experimental.launch
 import java.io.FileInputStream
 import java.io.FileOutputStream
+import java.net.Inet4Address
 import java.net.InetSocketAddress
 import java.net.NetworkInterface
 import java.net.SocketException
 import java.nio.ByteBuffer
 import java.nio.channels.DatagramChannel
+import java.util.concurrent.ConcurrentHashMap
 
 
 class VpnBlocker : VpnService(), Handler.Callback {
@@ -42,6 +44,9 @@ class VpnBlocker : VpnService(), Handler.Callback {
 
     private var mHandler: Handler? = null
     private var mConfigureIntent: PendingIntent? = null
+
+    // TODO write cleaner for requests without response
+    private val pendingRequests = ConcurrentHashMap<Int, DnsPacket>()
 
     override fun onCreate() {
         if (mHandler == null) {
@@ -73,20 +78,24 @@ class VpnBlocker : VpnService(), Handler.Callback {
 
             blockedNames.addAll(resources.openRawResource(R.raw.block_list).reader().readLines())
 
+            // TODO make UI selector for a DNS server
+            val dnsAddress = "8.8.8.8"
+
+            "Using DNS server $dnsAddress".log()
             try {
                 val builder = builder.setSession("AddBloo")
-                        .addDnsServer("8.8.8.8")
-                        .addRoute("8.8.8.8", 32)
+                        .addDnsServer(dnsAddress)
+                        .addRoute(dnsAddress, 32)
                         .addAddress(address, if (address.length > 15) 128 else 32)
 
                 mInterface = builder.establish()
 
                 DatagramChannel.open().use { tunnel ->
-                    tunnel.connect(InetSocketAddress("8.8.8.8", 53))
+                    tunnel.connect(InetSocketAddress(dnsAddress, 53))
                     tunnel.configureBlocking(false)
                     protect(tunnel.socket())
 
-                    handlePackets(tunnel)
+                    filterPackets(tunnel)
                 }
             } catch (e: Exception) {
                 "Some Error ".logE(e)
@@ -96,34 +105,48 @@ class VpnBlocker : VpnService(), Handler.Callback {
         }
     }
 
-    private suspend fun handlePackets(tunnel: DatagramChannel) {
+    private suspend fun filterPackets(tunnel: DatagramChannel) {
         val input = FileInputStream(mInterface!!.fileDescriptor)
         val out = FileOutputStream(mInterface!!.fileDescriptor)
         var lastSendTime = System.currentTimeMillis()
         var lastReceiveTime = System.currentTimeMillis()
 
-        val packet = ByteBuffer.allocate(Short.MAX_VALUE + 0)
+        val packet = ByteBuffer.allocate(100_000)
 
-        // TODO if it will be slow consider spliiting into several threads
-        while (true) {
+        // TODO if it will be slow consider splitting into several threads
+        while (job?.isCancelled == false) {
             var idle = true
 
             var length = input.read(packet.array())
             if (length > 0) {
-                if (allowedPacket(packet.array().copyOfRange(0, length))) {
-                    packet.limit(length)
-                    tunnel.write(packet)
+                DnsPacket.fromArray(packet.array().sliceArray(0 until length))?.let { dns ->
+                    // TODO should we pass through non TCP/UDP packets?
+                    if (allowedPacket(dns.queries)) {
+                        pendingRequests[dns.id] = dns
+                        tunnel.write(ByteBuffer.wrap(dns.datagram))
+                    } else {
+                        // forging DNS response
+//                        dns.fillHeaders(dns)
+//                        dns.makeLoopbackResponse()
+//                        out.write(dns.raw, 0, dns.getLength())
+                    }
                 }
-                packet.clear()
 
+                packet.clear()
                 idle = false
                 lastReceiveTime = System.currentTimeMillis()
             }
 
             length = tunnel.read(packet)
             if (length > 0) {
+                val data = packet.array().sliceArray(0 until length)
                 if (packet.get(0) != 0.toByte()) {
-                    out.write(packet.array(), 0, length)
+                    DnsPacket.fromDatagram(data).let { dns ->
+                        if (pendingRequests.contains(dns.id)) {
+                            dns.fillHeaders(pendingRequests[dns.id]!!)
+                            out.write(dns.raw, 0, length)
+                        }
+                    }
                 }
                 packet.clear()
 
@@ -153,15 +176,18 @@ class VpnBlocker : VpnService(), Handler.Callback {
 
     private fun stop() {
         try {
-            job?.cancel()
+            job?.cancel() // TODO properly cancel a job
             mInterface?.close()
             mInterface = null
-        } catch (e: Exception) {}
+        } catch (e: Exception) {
+            "Stopping error".logE(e)
+        }
     }
 
-    private fun allowedPacket(packet: ByteArray): Boolean {
-        val dns = DnsPacket.fromArray(packet) ?: return true // allowing non UDP/TCP packets
-        return blockedNames.intersect(dns.queries).isEmpty()
+    private fun allowedPacket(domains: List<String>): Boolean {
+        val allowed = blockedNames.intersect(domains).isEmpty()
+        if (!allowed) { "Blocking DNS request to $domains".log() }
+        return allowed
     }
 
     override fun onDestroy() {
@@ -179,7 +205,7 @@ class VpnBlocker : VpnService(), Handler.Callback {
                 while (enumIpAddr.hasMoreElements()) {
                     val inetAddress = enumIpAddr.nextElement()
                     "\n****** INET ADDRESS ******\naddress: ${inetAddress.hostAddress}\nhostname: ${inetAddress.hostName}\n".log()
-                    if (!inetAddress.isLoopbackAddress) {
+                    if (!inetAddress.isLoopbackAddress && inetAddress is Inet4Address) {
                         "IS NOT LOOPBACK ADDRESS: ${inetAddress.hostAddress}".log()
                         return inetAddress.hostAddress.toString()
                     }

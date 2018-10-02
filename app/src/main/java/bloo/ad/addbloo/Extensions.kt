@@ -38,3 +38,11 @@ fun ByteArray.toPrettyHex() : String{
 
     return result.toString()
 }
+
+fun ByteArray?.toInt(): Int {
+    var result = 0
+    this?.forEach {
+        result = (result shl 8) + (it.toInt() and 0xFF)
+    }
+    return result
+}

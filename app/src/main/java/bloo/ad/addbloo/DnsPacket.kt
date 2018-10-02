@@ -3,7 +3,7 @@ package bloo.ad.addbloo
 class DnsPacket(var raw: ByteArray, var id: Int, var qr: Byte, var opcode: Byte, var aa: Byte,
                 var tc: Byte, var rd: Byte, var ra: Byte, var z: Byte, var rcCode: Byte,
                 var qdCount: Int, var anCount: Int, var nsCount: Int, var arCount: Int,
-                val rest: ByteArray, var protocol: Byte, val datagram: ByteArray) {
+                val rest: ByteArray, var protocol: Byte, var datagram: ByteArray) {
 
     companion object {
         private const val PROTOCOL_OFFSET = 9
@@ -81,7 +81,7 @@ class DnsPacket(var raw: ByteArray, var id: Int, var qr: Byte, var opcode: Byte,
         }
     }
 
-    fun fillHeaders(request: DnsPacket) {
+    fun setHeaders(request: DnsPacket) {
         fillIpHeader(request)
         fillUdpHeader(request)
     }
@@ -130,7 +130,27 @@ class DnsPacket(var raw: ByteArray, var id: Int, var qr: Byte, var opcode: Byte,
     }
 
     fun makeLoopbackResponse() {
-        // TODO implement
+        val answer = ByteArray(16)
+        answer[0] = (0xC0).toByte()
+        answer[1] = (0x0C).toByte()
+        answer[2] = (0x00).toByte()
+        answer[3] = (0x01).toByte()
+        answer[4] = (0x00).toByte()
+        answer[5] = (0x01).toByte()
+        answer[6] = (0x00).toByte()
+        answer[7] = (0x00).toByte()
+        answer[8] = (0x02).toByte()
+        answer[9] = (0x58).toByte()
+        answer[10] = (0x00).toByte()
+        answer[11] = (0x04).toByte()
+        answer[12] = 127.toByte()
+        answer[13] = 0.toByte()
+        answer[14] = 0.toByte()
+        answer[15] = 1.toByte()
+
+        datagram[9] = 1.toByte()
+        datagram[8] = 0.toByte()
+        raw = raw.sliceArray(0 until 28) + datagram + answer
     }
 
     fun getLength() = raw.size

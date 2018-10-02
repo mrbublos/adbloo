@@ -15,10 +15,7 @@ import kotlinx.coroutines.experimental.delay
 import kotlinx.coroutines.experimental.launch
 import java.io.FileInputStream
 import java.io.FileOutputStream
-import java.net.Inet4Address
-import java.net.InetSocketAddress
-import java.net.NetworkInterface
-import java.net.SocketException
+import java.net.*
 import java.nio.ByteBuffer
 import java.nio.channels.DatagramChannel
 import java.util.concurrent.ConcurrentHashMap
@@ -79,8 +76,11 @@ class VpnBlocker : VpnService(), Handler.Callback {
             blockedNames.addAll(resources.openRawResource(R.raw.block_list).reader().readLines())
 
             // TODO make UI selector for a DNS server
-            val dnsAddress = "8.8.8.8"
+            val dnsAddresses = getDnsServers()
+            val dnsAddress = dnsAddresses[0].hostAddress
+//            val dnsAddress = "8.8.4.4"
 
+            "Using address $address".log()
             "Using DNS server $dnsAddress".log()
             try {
                 val builder = builder.setSession("AddBloo")
@@ -126,9 +126,9 @@ class VpnBlocker : VpnService(), Handler.Callback {
                         tunnel.write(ByteBuffer.wrap(dns.datagram))
                     } else {
                         // forging DNS response
-//                        dns.fillHeaders(dns)
-//                        dns.makeLoopbackResponse()
-//                        out.write(dns.raw, 0, dns.getLength())
+                        dns.makeLoopbackResponse()
+                        dns.setHeaders(dns)
+                        out.write(dns.raw, 0, dns.getLength())
                     }
                 }
 
@@ -143,7 +143,9 @@ class VpnBlocker : VpnService(), Handler.Callback {
                 if (packet.get(0) != 0.toByte()) {
                     DnsPacket.fromDatagram(data).let { dns ->
                         if (pendingRequests.contains(dns.id)) {
-                            dns.fillHeaders(pendingRequests[dns.id]!!)
+                            val request = pendingRequests[dns.id]!!
+                            "Received response for ${request.queries}".log()
+                            dns.setHeaders(request)
                             out.write(dns.raw, 0, length)
                         }
                     }
@@ -176,7 +178,9 @@ class VpnBlocker : VpnService(), Handler.Callback {
 
     private fun stop() {
         try {
-            job?.cancel() // TODO properly cancel a job
+            try {
+                job?.cancel() // TODO properly cancel a job
+            } catch (e: Exception) {}
             mInterface?.close()
             mInterface = null
         } catch (e: Exception) {
@@ -186,7 +190,7 @@ class VpnBlocker : VpnService(), Handler.Callback {
 
     private fun allowedPacket(domains: List<String>): Boolean {
         val allowed = blockedNames.intersect(domains).isEmpty()
-        if (!allowed) { "Blocking DNS request to $domains".log() }
+        "DNS request to $domains, allowed: $allowed".log()
         return allowed
     }
 
@@ -234,5 +238,19 @@ class VpnBlocker : VpnService(), Handler.Callback {
             }
         }
         return true
+    }
+
+    private fun getDnsServers(): List<InetAddress> {
+        val result = mutableListOf<InetAddress>()
+        val cm = connectivityManager
+        cm?.allNetworks?.forEach { network ->
+            val networkInfo = cm.getNetworkInfo(network)
+            if (networkInfo.isConnected) {
+                val linkProperties = cm.getLinkProperties(network)
+                result.addAll(linkProperties.dnsServers)
+            }
+        }
+        "Dns servers: $result".log()
+        return result
     }
 }

@@ -126,36 +126,42 @@ class DnsPacket(var raw: ByteArray, var id: Int, var qr: Byte, var opcode: Byte,
         raw[18] = request.raw[14]
         raw[19] = request.raw[15]
 
-        calculateChecksum()
+        calculateIpChecksum()
     }
 
     fun makeLoopbackResponse() {
-        val answer = ByteArray(16)
+        val isIpv6 = datagram[datagram.size - 3] == 0x1c.toByte()
+
+        val answer = ByteArray(12)
         answer[0] = (0xC0).toByte()
         answer[1] = (0x0C).toByte()
         answer[2] = (0x00).toByte()
-        answer[3] = (0x01).toByte()
+        answer[3] = datagram[datagram.size - 3] // type of address
         answer[4] = (0x00).toByte()
         answer[5] = (0x01).toByte()
         answer[6] = (0x00).toByte()
-        answer[7] = (0x00).toByte()
-        answer[8] = (0x02).toByte()
-        answer[9] = (0x58).toByte()
+        answer[7] = (0x01).toByte()
+        answer[8] = (0x51).toByte()
+        answer[9] = (0x25).toByte()
         answer[10] = (0x00).toByte()
-        answer[11] = (0x04).toByte()
-        answer[12] = 127.toByte()
-        answer[13] = 0.toByte()
-        answer[14] = 0.toByte()
-        answer[15] = 1.toByte()
+        answer[11] = if (!isIpv6) (0x04).toByte() else (0x10).toByte() // data length
 
-        datagram[9] = 1.toByte()
-        datagram[8] = 0.toByte()
-        raw = raw.sliceArray(0 until 28) + datagram + answer
+        val address = ByteArray(16) { _ -> 0.toByte() }
+        if (!isIpv6) { address[12] = 127.toByte() }
+        address[15] = 1.toByte()
+
+        datagram[6] = 0.toByte() // answers number
+        datagram[7] = 1.toByte()
+
+        datagram[2] = (0x80 + datagram[2]).toByte() // flags to a response
+
+        datagram += answer + if (isIpv6) address else address.sliceArray(12 until 16)
+        raw = raw.sliceArray(0 until 28) + datagram
     }
 
     fun getLength() = raw.size
 
-    private fun calculateChecksum() {
+    private fun calculateIpChecksum() {
         // checksum
         val sum = raw.sliceArray(0..19).toInt()
         val carry = sum shr 16

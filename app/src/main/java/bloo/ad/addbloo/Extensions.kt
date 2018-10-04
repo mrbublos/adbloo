@@ -23,7 +23,7 @@ fun Byte?.bits(offset: Int, len: Int): Byte {
 
 private val HEX_CHARS = "0123456789ABCDEF".toCharArray()
 
-fun ByteArray.toPrettyHex() : String{
+fun ByteArray.toHex(pretty: Boolean = true) : String{
     val result = StringBuffer()
     var counter = 1
     forEach {
@@ -33,10 +33,15 @@ fun ByteArray.toPrettyHex() : String{
         result.append(HEX_CHARS[firstIndex])
         result.append(HEX_CHARS[secondIndex])
         result.append(" ")
-        if (counter++ % 8 == 0) { result.append("\n") }
+        if (pretty && counter++ % 8 == 0) { result.append("\n") }
     }
 
     return result.toString()
+}
+
+fun ByteArray.toWireShark() : String{
+    val result = this.toHex(false)
+    return "00000 00 e0 18 b1 0c ad 00 c0 9f 32 41 8c 08 00 $result"
 }
 
 fun ByteArray?.toInt(): Int {

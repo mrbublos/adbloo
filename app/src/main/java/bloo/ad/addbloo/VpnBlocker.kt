@@ -18,6 +18,7 @@ import java.io.FileOutputStream
 import java.net.*
 import java.nio.ByteBuffer
 import java.nio.channels.DatagramChannel
+import java.util.concurrent.CancellationException
 import java.util.concurrent.ConcurrentHashMap
 
 
@@ -77,8 +78,8 @@ class VpnBlocker : VpnService(), Handler.Callback {
 
             // TODO make UI selector for a DNS server
             val dnsAddresses = getDnsServers()
-            val dnsAddress = dnsAddresses[0].hostAddress
-//            val dnsAddress = "8.8.4.4"
+            var dnsAddress = dnsAddresses[0].hostAddress
+//            dnsAddress = "8.8.8.8" // for emulator
 
             "Using address $address".log()
             "Using DNS server $dnsAddress".log()
@@ -95,7 +96,9 @@ class VpnBlocker : VpnService(), Handler.Callback {
                     tunnel.configureBlocking(false)
                     protect(tunnel.socket())
 
-                    filterPackets(tunnel)
+                    try {
+                        filterPackets(tunnel)
+                    } catch (e: CancellationException) {}
                 }
             } catch (e: Exception) {
                 "Some Error ".logE(e)
@@ -128,6 +131,7 @@ class VpnBlocker : VpnService(), Handler.Callback {
                         // forging DNS response
                         dns.makeLoopbackResponse()
                         dns.setHeaders(dns)
+//                        "Sending forged response ${dns.raw.toWireShark()}".log()
                         out.write(dns.raw, 0, dns.getLength())
                     }
                 }
@@ -157,7 +161,11 @@ class VpnBlocker : VpnService(), Handler.Callback {
             }
 
             if (idle) {
-                delay(SLEEP_INT)
+                try {
+                    delay(SLEEP_INT)
+                } catch (e: Exception) {
+                    break
+                }
 
                 val now = System.currentTimeMillis()
                 if (lastSendTime + KEEP_ALIVE_INT < now) {
@@ -170,7 +178,7 @@ class VpnBlocker : VpnService(), Handler.Callback {
                     lastSendTime = now
                 } else if (lastReceiveTime + RECEIVE_TIMEOUT < now) {
                     "Timed out".log()
-                    throw IllegalStateException("Timed out")
+                    break
                 }
             }
         }
@@ -178,18 +186,25 @@ class VpnBlocker : VpnService(), Handler.Callback {
 
     private fun stop() {
         try {
-            try {
-                job?.cancel() // TODO properly cancel a job
-            } catch (e: Exception) {}
+            job?.cancel()
             mInterface?.close()
             mInterface = null
+            stopSelf()
         } catch (e: Exception) {
             "Stopping error".logE(e)
         }
     }
 
     private fun allowedPacket(domains: List<String>): Boolean {
-        val allowed = blockedNames.intersect(domains).isEmpty()
+        var allowed = true
+        domains.forEach dn@{ domain ->
+            blockedNames.forEach { blocked ->
+                if (domain.contains(blocked)) {
+                    allowed = false
+                    return@dn
+                }
+            }
+        }
         "DNS request to $domains, allowed: $allowed".log()
         return allowed
     }

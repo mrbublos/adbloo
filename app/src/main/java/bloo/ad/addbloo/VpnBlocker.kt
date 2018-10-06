@@ -79,7 +79,7 @@ class VpnBlocker : VpnService(), Handler.Callback {
             // TODO make UI selector for a DNS server
             val dnsAddresses = getDnsServers()
             var dnsAddress = dnsAddresses[0].hostAddress
-//            dnsAddress = "8.8.8.8" // for emulator
+            dnsAddress = "8.8.8.8" // for emulator
 
             "Using address $address".log()
             "Using DNS server $dnsAddress".log()
@@ -145,12 +145,13 @@ class VpnBlocker : VpnService(), Handler.Callback {
             if (length > 0) {
                 val data = packet.array().sliceArray(0 until length)
                 if (packet.get(0) != 0.toByte()) {
-                    DnsPacket.fromDatagram(data).let { dns ->
-                        if (pendingRequests.contains(dns.id)) {
-                            val request = pendingRequests[dns.id]!!
+                    DnsPacket.fromDatagram(data).let { dnsResponse ->
+                        if (pendingRequests.containsKey(dnsResponse.id)) {
+                            val request = pendingRequests[dnsResponse.id]!!
                             "Received response for ${request.queries}".log()
-                            dns.setHeaders(request)
-                            out.write(dns.raw, 0, length)
+                            dnsResponse.setHeaders(request)
+                            "Response ${dnsResponse.raw.toWireShark()}".log()
+                            out.write(dnsResponse.raw, 0, length)
                         }
                     }
                 }
@@ -231,7 +232,7 @@ class VpnBlocker : VpnService(), Handler.Callback {
                 }
             }
         } catch (ex: SocketException) {
-            "Error".logE(ex)
+            "Error getting IP address ".logE(ex)
         }
 
         return null

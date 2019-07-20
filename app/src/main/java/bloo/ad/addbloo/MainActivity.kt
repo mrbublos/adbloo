@@ -1,17 +1,16 @@
 package bloo.ad.addbloo
 
 import android.app.Activity
+import android.content.Intent
 import android.net.VpnService
 import android.os.Bundle
-import android.support.v7.app.AppCompatActivity
+import androidx.appcompat.app.AppCompatActivity
 import kotlinx.android.synthetic.main.activity_main.*
-import android.content.Intent
-
 
 
 class MainActivity : AppCompatActivity() {
 
-    var switchedOn = false
+    private var switchedOn = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -26,11 +25,15 @@ class MainActivity : AppCompatActivity() {
             switchedOn = !switchedOn
             startButton.text = if (switchedOn) "Stop blocking" else "Start blocking"
         }
+        
+        configButton.setOnClickListener {
+            startActivity(Intent(this, FilterActivity::class.java))
+        }
     }
 
-    override fun onSaveInstanceState(outState: Bundle?) {
+    override fun onSaveInstanceState(outState: Bundle) {
         super.onSaveInstanceState(outState)
-        outState?.putBoolean("switched", switchedOn)
+        outState.putBoolean("switched", switchedOn)
     }
 
     override fun onDestroy() {
@@ -48,6 +51,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
         if (resultCode == Activity.RESULT_OK) {
             val intent = Intent(this, VpnBlocker::class.java)
             startService(intent.setAction(VpnBlocker.ACTION_CONNECT))

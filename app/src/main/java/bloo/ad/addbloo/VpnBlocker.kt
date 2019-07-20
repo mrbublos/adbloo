@@ -9,10 +9,11 @@ import android.os.Handler
 import android.os.Message
 import android.os.ParcelFileDescriptor
 import android.widget.Toast
-import kotlinx.coroutines.experimental.CommonPool
-import kotlinx.coroutines.experimental.Job
-import kotlinx.coroutines.experimental.delay
-import kotlinx.coroutines.experimental.launch
+import androidx.lifecycle.*
+import bloo.ad.addbloo.db.Blocked
+import bloo.ad.addbloo.db.Db
+import bloo.ad.addbloo.db.UrlDao
+import kotlinx.coroutines.*
 import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.net.*
@@ -20,10 +21,11 @@ import java.nio.ByteBuffer
 import java.nio.channels.DatagramChannel
 import java.util.concurrent.CancellationException
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.ConcurrentLinkedQueue
+import java.util.concurrent.atomic.AtomicReference
 
 
-class VpnBlocker : VpnService(), Handler.Callback {
-
+class VpnBlocker : VpnService(), Handler.Callback, LifecycleOwner {
 
     companion object {
         const val KEEP_ALIVE_INT = 15
@@ -34,10 +36,14 @@ class VpnBlocker : VpnService(), Handler.Callback {
         const val ACTION_CONNECT = "adBloo.connect"
     }
 
+    private val mDispatcher = ServiceLifecycleDispatcher(this)
+
     var job: Job? = null
     var builder: Builder = Builder()
     var mInterface: ParcelFileDescriptor? = null
-    private val blockedNames = mutableListOf<String>()
+
+
+    private val blockedNames = AtomicReference<List<String>>(mutableListOf())
     private var connectivityManager: ConnectivityManager? = null
 
     private var mHandler: Handler? = null
@@ -46,15 +52,18 @@ class VpnBlocker : VpnService(), Handler.Callback {
     // TODO write cleaner for requests without response
     private val pendingRequests = ConcurrentHashMap<Int, DnsPacket>()
 
+    private lateinit var dao: UrlDao
+
     override fun onCreate() {
         if (mHandler == null) {
             mHandler = Handler(this)
         }
-        // Create the intent to "configure" the connection (just start ToyVpnClient).
+
         mConfigureIntent = PendingIntent.getActivity(this, 0, Intent(this, VpnBlocker::class.java),
                                                      PendingIntent.FLAG_UPDATE_CURRENT)
 
         connectivityManager = getSystemService(CONNECTIVITY_SERVICE) as ConnectivityManager
+        dao = Db.instance(applicationContext).blockedUrlsDao()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -67,26 +76,25 @@ class VpnBlocker : VpnService(), Handler.Callback {
         }
     }
 
-    fun start() {
+    private fun start() {
         updateForegroundNotification(R.string.connecting)
         mHandler?.sendEmptyMessage(R.string.connecting)
 
-        job = launch(CommonPool) {
+        job = GlobalScope.launch(Dispatchers.IO) {
             val address = getLocalIpAddress() ?: throw IllegalStateException("Unable to determine local address")
-
-            blockedNames.addAll(resources.openRawResource(R.raw.block_list).reader().readLines())
+            startBlackListSynchronize()
 
             // TODO make UI selector for a DNS server
             val dnsAddresses = getDnsServers()
-            var dnsAddress = dnsAddresses[0].hostAddress
-            dnsAddress = "8.8.8.8" // for emulator
+            val dnsAddress = dnsAddresses.find { it is Inet4Address } ?: throw IllegalStateException("Unable to determine dns address")
+            //            dnsAddress = "8.8.8.8" // for emulator
 
             "Using address $address".log()
             "Using DNS server $dnsAddress".log()
             try {
                 val builder = builder.setSession("AddBloo")
                         .addDnsServer(dnsAddress)
-                        .addRoute(dnsAddress, 32)
+                        .addRoute(dnsAddress.hostAddress, 32)
                         .addAddress(address, if (address.length > 15) 128 else 32)
 
                 mInterface = builder.establish()
@@ -106,6 +114,13 @@ class VpnBlocker : VpnService(), Handler.Callback {
                 stop()
             }
         }
+    }
+
+    private fun startBlackListSynchronize() {
+        dao.getAll().observe(this,  Observer { data ->
+            val newBlockedUrls = data.filter { it.blocked }.map(Blocked::host)
+            blockedNames.set(newBlockedUrls)
+        })
     }
 
     private suspend fun filterPackets(tunnel: DatagramChannel) {
@@ -150,7 +165,7 @@ class VpnBlocker : VpnService(), Handler.Callback {
                             val request = pendingRequests[dnsResponse.id]!!
                             "Received response for ${request.queries}".log()
                             dnsResponse.setHeaders(request)
-                            "Response ${dnsResponse.raw.toWireShark()}".log()
+//                            "Response ${dnsResponse.raw.toWireShark()}".log()
                             out.write(dnsResponse.raw, 0, length)
                         }
                     }
@@ -198,8 +213,16 @@ class VpnBlocker : VpnService(), Handler.Callback {
 
     private fun allowedPacket(domains: List<String>): Boolean {
         var allowed = true
+        GlobalScope.launch(Dispatchers.IO) {
+            domains.filter {
+                !blockedNames.get().contains(it)
+            }.forEach {
+                dao.insert(Blocked(it, false))
+            }
+        }
+
         domains.forEach dn@{ domain ->
-            blockedNames.forEach { blocked ->
+            blockedNames.get().forEach { blocked ->
                 if (domain.contains(blocked)) {
                     allowed = false
                     return@dn
@@ -268,5 +291,9 @@ class VpnBlocker : VpnService(), Handler.Callback {
         }
         "Dns servers: $result".log()
         return result
+    }
+
+    override fun getLifecycle(): Lifecycle {
+        return mDispatcher.lifecycle
     }
 }

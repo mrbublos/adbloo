@@ -4,6 +4,8 @@ import android.app.Activity
 import android.content.Intent
 import android.net.VpnService
 import android.os.Bundle
+import androidx.activity.result.ActivityResultCallback
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import kotlinx.android.synthetic.main.activity_main.*
 
@@ -44,7 +46,7 @@ class MainActivity : AppCompatActivity() {
     private fun startVpn() {
         val intent = VpnService.prepare(applicationContext)
         if (intent != null) {
-            startActivityForResult(intent, 0)
+            registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {}
         } else {
             onActivityResult(0, RESULT_OK, null)
         }

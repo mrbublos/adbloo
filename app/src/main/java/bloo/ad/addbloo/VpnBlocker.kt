@@ -1,14 +1,19 @@
 package bloo.ad.addbloo
 
 import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
 import android.app.PendingIntent
+import android.content.Context
 import android.content.Intent
+import android.graphics.Color
 import android.net.ConnectivityManager
 import android.net.VpnService
 import android.os.Handler
 import android.os.Message
 import android.os.ParcelFileDescriptor
 import android.widget.Toast
+import androidx.core.app.NotificationCompat
 import androidx.lifecycle.*
 import bloo.ad.addbloo.db.Blocked
 import bloo.ad.addbloo.db.Db
@@ -116,8 +121,8 @@ class VpnBlocker : VpnService(), Handler.Callback, LifecycleOwner {
         }
     }
 
-    private fun startBlackListSynchronize() {
-        dao.getAll().observe(this,  Observer { data ->
+    private suspend fun startBlackListSynchronize() = withContext(Dispatchers.Main) {
+        dao.getAll().observe(this@VpnBlocker,  Observer { data ->
             val newBlockedUrls = data.filter { it.blocked }.map(Blocked::host)
             blockedNames.set(newBlockedUrls)
         })
@@ -262,11 +267,21 @@ class VpnBlocker : VpnService(), Handler.Callback, LifecycleOwner {
     }
 
     private fun updateForegroundNotification(message: Int) {
-        startForeground(1, Notification.Builder(this)
+        startForeground(1, NotificationCompat.Builder(this, createNotificationChannel("adBloo", "adBloo"))
                 .setSmallIcon(R.drawable.ic_launcher_background)
                 .setContentText(getString(message))
                 .setContentIntent(mConfigureIntent)
+                .setOngoing(true)
                 .build())
+    }
+
+    private fun createNotificationChannel(channelId: String, channelName: String): String{
+        val chan = NotificationChannel(channelId, channelName, NotificationManager.IMPORTANCE_NONE)
+        chan.lightColor = Color.BLUE
+        chan.lockscreenVisibility = Notification.VISIBILITY_PRIVATE
+        val service = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        service.createNotificationChannel(chan)
+        return channelId
     }
 
     override fun handleMessage(message: Message?): Boolean {
